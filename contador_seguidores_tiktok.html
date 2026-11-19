@@ -239,6 +239,24 @@
   // ---- conexión con TikTok LIVE (vía tik.tools)
   const status = document.getElementById('status');
   const setStatus = (t, ok) => { status.textContent = t; status.classList.toggle('ok', !!ok); };
+  // ---- modo diagnóstico (&debug=1): muestra los eventos que llegan
+  const DEBUG = P.get('debug') === '1';
+  let dbg = null, dbgLines = [];
+  if (DEBUG) { dbg = document.createElement('div');
+    dbg.style.cssText = 'position:fixed;left:6px;bottom:6px;right:6px;font:12px monospace;color:#fff;background:rgba(0,0,0,.75);padding:6px;border-radius:6px;white-space:pre;z-index:9';
+    document.body.appendChild(dbg); }
+  function logDbg(t) { if (!DEBUG) return; dbgLines.unshift(t); dbgLines = dbgLines.slice(0, 8); dbg.textContent = dbgLines.join('\n'); }
+  function handle(m) {
+    const type = String(m.event || m.type || m.eventType || '').toLowerCase();
+    const d = m.data || m.payload || m;
+    const u = d.user || (d.data && d.data.user) || d;
+    const label = String(d.displayType || d.label || d.action || d.message || '');
+    logDbg(`${new Date().toLocaleTimeString()}  ${type || '?'}  ${u.uniqueId || ''} ${label.slice(0, 40)}`);
+    const isFollow = type.includes('follow') ||
+      ((type === 'social' || type === 'socialmessage') && /follow/i.test(label)) ||
+      String(d.action) === '1' && type === 'social';
+    if (isFollow) addFollow(String(u.uniqueId || u.userId || ''), u.nickname || u.uniqueId || '');
+  }
   function connect() {
     if (!APIKEY) { setStatus(PRUEBA ? 'modo prueba' : 'falta apikey en la URL', PRUEBA); return; }
     let ws;
@@ -247,12 +265,8 @@
     ws.onopen = () => setStatus('conectado a @' + USUARIO, true);
     ws.onmessage = ev => {
       let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-      const type = (m.event || m.type || '').toString().toLowerCase();
-      const d = m.data || m;
-      const u = d.user || d;
-      const isFollow = type === 'follow' ||
-        (type === 'social' && /follow/i.test(String(d.displayType || d.label || '')));
-      if (isFollow) addFollow(u.uniqueId || u.userId || '', u.nickname || u.uniqueId || '');
+      const list = Array.isArray(m) ? m : (Array.isArray(m.events) ? m.events : [m]);
+      for (const it of list) handle(it);
     };
     ws.onclose = () => { setStatus('esperando LIVE de @' + USUARIO + '…'); setTimeout(connect, 15000); };
     ws.onerror = () => {};
