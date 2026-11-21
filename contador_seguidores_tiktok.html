@@ -257,18 +257,19 @@
       String(d.action) === '1' && type === 'social';
     if (isFollow) addFollow(String(u.uniqueId || u.userId || ''), u.nickname || u.uniqueId || '');
   }
+  let retry = 15000;   // espera entre reintentos: crece hasta 5 min si no estás en vivo (ahorra peticiones)
   function connect() {
     if (!APIKEY) { setStatus(PRUEBA ? 'modo prueba' : 'falta apikey en la URL', PRUEBA); return; }
     let ws;
     try { ws = new WebSocket(`wss://api.tik.tools?uniqueId=${encodeURIComponent(USUARIO)}&apiKey=${encodeURIComponent(APIKEY)}`); }
     catch (e) { setStatus('error de conexión'); setTimeout(connect, 15000); return; }
     ws.onopen = () => setStatus('conectado a @' + USUARIO, true);
-    ws.onmessage = ev => {
+    ws.onmessage = ev => { retry = 15000;
       let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
       const list = Array.isArray(m) ? m : (Array.isArray(m.events) ? m.events : [m]);
       for (const it of list) handle(it);
     };
-    ws.onclose = () => { setStatus('esperando LIVE de @' + USUARIO + '…'); setTimeout(connect, 15000); };
+    ws.onclose = e => { logDbg(`conexión cerrada (${e && e.code || ''}) ${e && e.reason || ''}`); setStatus('esperando LIVE de @' + USUARIO + '…'); setTimeout(connect, retry); retry = Math.min(retry * 2, 300000); };
     ws.onerror = () => {};
   }
   connect();

@@ -220,30 +220,50 @@
   // ---- conexión con TikTok LIVE (vía tik.tools)
   const status = document.getElementById('status');
   const setStatus = (t, ok) => { status.textContent = t; status.classList.toggle('ok', !!ok); };
+  // ---- modo diagnóstico (&debug=1): muestra lo que llega del LIVE
+  const DEBUG = P.get('debug') === '1';
+  let dbg = null, dbgLines = [];
+  if (DEBUG) { dbg = document.createElement('div');
+    dbg.style.cssText = 'position:fixed;left:6px;bottom:6px;right:6px;font:12px monospace;color:#fff;background:rgba(0,0,0,.75);padding:6px;border-radius:6px;white-space:pre;z-index:9';
+    document.body.appendChild(dbg); }
+  function logDbg(t) { if (!DEBUG) return; dbgLines.unshift(new Date().toLocaleTimeString() + '  ' + t); dbgLines = dbgLines.slice(0, 8); dbg.textContent = dbgLines.join('\n'); }
+  // combos pendientes: se cuentan al terminar el combo, o 5 s después del último aviso si TikTok no manda el final
+  const pend = new Map();
+  function countGift(key, g) {
+    const p = pend.get(key); if (p) { clearTimeout(p.timer); pend.delete(key); }
+    addGift(key + '|' + g.reps, g.name, g.each * g.reps, g.reps > 1 ? `${g.gname} x${g.reps}` : g.gname);
+  }
+  function handle(m) {
+    const type = String(m.event || m.type || m.eventType || '').toLowerCase();
+    const d = m.data || m.payload || m;
+    const u = d.user || d;
+    if (type.includes('error') || m.error) { logDbg('ERROR: ' + JSON.stringify(m).slice(0, 90)); return; }
+    if (!type.includes('gift')) { logDbg(type || '?'); return; }
+    const each = +(d.diamondCount ?? (d.gift && (d.gift.diamondCount ?? d.gift.diamond_count)) ?? d.diamond_count ?? 0);
+    const reps = +(d.repeatCount ?? d.repeat_count ?? 1) || 1;
+    const gname = d.giftName || (d.gift && d.gift.name) || 'regalo';
+    const name = u.nickname || u.uniqueId || '';
+    const key = [u.uniqueId || u.userId || name, d.giftId || gname, d.groupId || ''].join('|');
+    const streakable = d.giftType === 1 || d.streakable === true;
+    logDbg(`gift ${gname} x${reps} (${each}) ${streakable ? (d.repeatEnd ? 'fin combo' : 'combo…') : ''} ${name}`);
+    const g = { each, reps, gname, name };
+    if (!streakable || d.repeatEnd) { countGift(key, g); return; }
+    const p = pend.get(key); if (p) clearTimeout(p.timer);
+    pend.set(key, { g, timer: setTimeout(() => countGift(key, g), 5000) });
+  }
+  let retry = 15000;   // espera entre reintentos: crece hasta 5 min si no estás en vivo (ahorra peticiones)
   function connect() {
     if (!APIKEY) { setStatus(PRUEBA ? 'modo prueba' : 'falta apikey en la URL', PRUEBA); return; }
     let ws;
     try { ws = new WebSocket(`wss://api.tik.tools?uniqueId=${encodeURIComponent(USUARIO)}&apiKey=${encodeURIComponent(APIKEY)}`); }
     catch (e) { setStatus('error de conexión'); setTimeout(connect, 15000); return; }
     ws.onopen = () => setStatus('conectado a @' + USUARIO, true);
-    ws.onmessage = ev => {
-      let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-      const type = (m.event || m.type || '').toString().toLowerCase();
-      const d = m.data || m;
-      const u = d.user || d;
-      if (type !== 'gift') return;
-      // Regalos en combo (rosas, etc.) llegan varias veces mientras se mandan:
-      // solo se suman cuando termina el combo (repeatEnd), con el total del combo.
-      const streakable = d.giftType === 1 || d.streakable === true;
-      if (streakable && !d.repeatEnd) return;
-      const each = +(d.diamondCount ?? (d.gift && d.gift.diamondCount) ?? 0);
-      const reps = +(d.repeatCount ?? 1) || 1;
-      const coins = each * reps;
-      const gname = d.giftName || (d.gift && d.gift.name) || 'regalo';
-      const id = d.msgId || d.logId || d.eventId || [u.uniqueId, gname, d.groupId || '', reps, d.createTime || ''].join('|');
-      addGift(String(id), u.nickname || u.uniqueId || '', coins, reps > 1 ? `${gname} x${reps}` : gname);
+    ws.onmessage = ev => { retry = 15000;
+      let m; try { m = JSON.parse(ev.data); } catch (e) { logDbg('texto: ' + String(ev.data).slice(0, 60)); return; }
+      const list = Array.isArray(m) ? m : (Array.isArray(m.events) ? m.events : [m]);
+      for (const it of list) handle(it);
     };
-    ws.onclose = () => { setStatus('esperando LIVE de @' + USUARIO + '…'); setTimeout(connect, 15000); };
+    ws.onclose = e => { logDbg(`conexión cerrada (${e && e.code || ''}) ${e && e.reason || ''}`); setStatus('esperando LIVE de @' + USUARIO + '…'); setTimeout(connect, retry); retry = Math.min(retry * 2, 300000); };
     ws.onerror = () => {};
   }
   connect();
